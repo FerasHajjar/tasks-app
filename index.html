@@ -655,6 +655,37 @@ let dragId=null;
 // ════════════════════════════════════════════════════
 let authTab = 'login';
 
+function showApp(user){
+  currentUser = user;
+  document.getElementById('auth-screen').style.display='none';
+  document.getElementById('topbar').style.display='flex';
+  document.getElementById('main-app').style.display='block';
+  document.getElementById('user-email-display').textContent = user.email;
+}
+
+function showAuth(){
+  currentUser = null;
+  document.getElementById('auth-screen').style.display='flex';
+  document.getElementById('topbar').style.display='none';
+  document.getElementById('main-app').style.display='none';
+  // Hide loading overlay if visible
+  const ov = document.getElementById('auth-loading');
+  if(ov) ov.style.display='none';
+}
+
+function showAuthLoading(msg){
+  let ov = document.getElementById('auth-loading');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'auth-loading';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:600;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px';
+    ov.innerHTML = `<div class="spinner"></div><div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted2)">${msg||'Signing in…'}</div>`;
+    document.body.appendChild(ov);
+  }
+  ov.querySelector('div:last-child').textContent = msg||'Signing in…';
+  ov.style.display='flex';
+}
+
 function switchAuthTab(tab, btn){
   authTab = tab;
   document.querySelectorAll('.auth-tab').forEach(b=>b.classList.remove('active'));
@@ -670,14 +701,27 @@ async function doAuth(){
   const errEl = document.getElementById('auth-err');
   if(!email||!pass){ showAuthErr('Please fill in all fields'); return; }
   btn.disabled=true; btn.textContent='…'; errEl.classList.remove('visible');
+
   const fn = authTab==='login'
     ? sb.auth.signInWithPassword({email,password:pass})
     : sb.auth.signUp({email,password:pass});
-  const {error} = await fn;
+  const {data, error} = await fn;
   btn.disabled=false;
   btn.textContent = authTab==='login'?'Sign In':'Create Account';
-  if(error) showAuthErr(error.message);
-  else if(authTab==='signup') showAuthErr('✓ Check your email to confirm your account!');
+
+  if(error){ showAuthErr(error.message); return; }
+  if(authTab==='signup'){ showAuthErr('✓ Check your email to confirm your account!'); return; }
+
+  // Login success — show loading immediately without waiting for onAuthStateChange
+  if(data?.user){
+    showAuthLoading('Loading your workspace…');
+    showApp(data.user);
+    await loadFromCloud();
+    render();
+    initPWA();
+    const ov=document.getElementById('auth-loading');
+    if(ov) ov.style.display='none';
+  }
 }
 
 async function doGoogleAuth(){
@@ -685,11 +729,8 @@ async function doGoogleAuth(){
 }
 
 async function signOut(){
-  try {
-    await sb.auth.signOut({ scope: 'local' });
-  } catch(e) { console.log(e); }
-  // Clear any cached session keys
-  Object.keys(localStorage).forEach(k => { if(k.startsWith('sb-')) localStorage.removeItem(k); });
+  try { await sb.auth.signOut({scope:'local'}); } catch(e){}
+  Object.keys(localStorage).forEach(k=>{ if(k.startsWith('sb-')) localStorage.removeItem(k); });
   window.location.href = window.location.href.split('?')[0];
 }
 
@@ -698,22 +739,34 @@ function showAuthErr(msg){
   el.textContent=msg; el.classList.add('visible');
 }
 
-// Listen to auth state
-sb.auth.onAuthStateChange(async (event, session)=>{
+// Check existing session immediately on load — avoids the "flash" of auth screen
+(async ()=>{
+  showAuthLoading('Loading…');
+  const { data:{ session } } = await sb.auth.getSession();
   if(session?.user){
-    currentUser = session.user;
-    document.getElementById('auth-screen').style.display='none';
-    document.getElementById('topbar').style.display='flex';
-    document.getElementById('main-app').style.display='block';
-    document.getElementById('user-email-display').textContent = currentUser.email;
+    showApp(session.user);
     await loadFromCloud();
     render();
     initPWA();
   } else {
-    currentUser=null;
-    document.getElementById('auth-screen').style.display='flex';
-    document.getElementById('topbar').style.display='none';
-    document.getElementById('main-app').style.display='none';
+    showAuth();
+  }
+  const ov=document.getElementById('auth-loading');
+  if(ov) ov.style.display='none';
+})();
+
+// Also listen for auth changes (Google OAuth redirect, token refresh, etc.)
+sb.auth.onAuthStateChange(async (event, session)=>{
+  if(event==='SIGNED_IN' && session?.user && !currentUser){
+    showAuthLoading('Loading your workspace…');
+    showApp(session.user);
+    await loadFromCloud();
+    render();
+    initPWA();
+    const ov=document.getElementById('auth-loading');
+    if(ov) ov.style.display='none';
+  } else if(event==='SIGNED_OUT'){
+    showAuth();
   }
 });
 
