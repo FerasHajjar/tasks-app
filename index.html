@@ -715,12 +715,15 @@ async function doAuth(){
   // Login success — show loading immediately without waiting for onAuthStateChange
   if(data?.user){
     showAuthLoading('Loading your workspace…');
-    showApp(data.user);
-    await loadFromCloud();
-    render();
-    initPWA();
-    const ov=document.getElementById('auth-loading');
-    if(ov) ov.style.display='none';
+    try {
+      showApp(data.user);
+      await loadFromCloud();
+      render();
+      initPWA();
+    } finally {
+      const ov=document.getElementById('auth-loading');
+      if(ov) ov.style.display='none';
+    }
   }
 }
 
@@ -742,17 +745,23 @@ function showAuthErr(msg){
 // Check existing session immediately on load — avoids the "flash" of auth screen
 (async ()=>{
   showAuthLoading('Loading…');
-  const { data:{ session } } = await sb.auth.getSession();
-  if(session?.user){
-    showApp(session.user);
-    await loadFromCloud();
-    render();
-    initPWA();
-  } else {
+  try {
+    const { data:{ session } } = await sb.auth.getSession();
+    if(session?.user){
+      showApp(session.user);
+      await loadFromCloud();
+      render();
+      initPWA();
+    } else {
+      showAuth();
+    }
+  } catch(e) {
+    console.error('Session check failed:', e);
     showAuth();
+  } finally {
+    const ov=document.getElementById('auth-loading');
+    if(ov) ov.style.display='none';
   }
-  const ov=document.getElementById('auth-loading');
-  if(ov) ov.style.display='none';
 })();
 
 // Also listen for auth changes (Google OAuth redirect, token refresh, etc.)
@@ -785,20 +794,50 @@ function setSyncStatus(s){
 async function loadFromCloud(){
   setSyncStatus('saving');
   const uid = currentUser.id;
-  const [fr,tr] = await Promise.all([
-    sb.from('folders').select('*').eq('user_id',uid).order('sort_order'),
-    sb.from('tasks').select('*').eq('user_id',uid).order('sort_order'),
-  ]);
-  if(fr.error||tr.error){
-    const msg = (fr.error||tr.error).message;
-    setSyncStatus('error');
-    showToast('DB Error: ' + msg, true);
-    console.error('Load error:', fr.error, tr.error);
-    return;
+  try {
+    // Timeout after 8 seconds to prevent infinite loading
+    const timeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('timeout')), 8000));
+    const [fr,tr] = await Promise.race([
+      Promise.all([
+        sb.from('folders').select('*').eq('user_id',uid).order('sort_order'),
+        sb.from('tasks').select('*').eq('user_id',uid).order('sort_order'),
+      ]),
+      timeout.then(()=>{ throw new Error('timeout'); })
+    ]);
+    if(fr.error||tr.error){
+      const msg = (fr.error||tr.error).message;
+      setSyncStatus('error');
+      showToast('DB Error: ' + msg, true);
+      console.error('Load error:', fr.error, tr.error);
+      return;
+    }
+    folders = fr.data.map(f=>({id:f.id,name:f.name,icon:f.icon||'📁',open:f.open!==false,sortOrder:f.sort_order||0}));
+    tasks   = tr.data.map(mapTask);
+    setSyncStatus('ok');
+  } catch(e) {
+    console.error('loadFromCloud failed:', e.message);
+    // Don't block the app — just show empty state and retry in background
+    folders = []; tasks = [];
+    setSyncStatus(e.message==='timeout' ? 'offline' : 'error');
+    showToast(e.message==='timeout' ? 'Slow connection — retrying…' : 'Load failed: '+e.message, true);
+    // Retry once after 3 seconds
+    setTimeout(async ()=>{
+      if(!currentUser) return;
+      try {
+        const [fr,tr] = await Promise.all([
+          sb.from('folders').select('*').eq('user_id',uid).order('sort_order'),
+          sb.from('tasks').select('*').eq('user_id',uid).order('sort_order'),
+        ]);
+        if(!fr.error&&!tr.error){
+          folders = fr.data.map(f=>({id:f.id,name:f.name,icon:f.icon||'📁',open:f.open!==false,sortOrder:f.sort_order||0}));
+          tasks   = tr.data.map(mapTask);
+          setSyncStatus('ok');
+          render();
+          showToast('Loaded ✓');
+        }
+      } catch(e2){ setSyncStatus('error'); }
+    }, 3000);
   }
-  folders = fr.data.map(f=>({id:f.id,name:f.name,icon:f.icon||'📁',open:f.open!==false,sortOrder:f.sort_order||0}));
-  tasks   = tr.data.map(mapTask);
-  setSyncStatus('ok'); // ← always show Synced after load, even if empty
 }
 
 function mapTask(t){
