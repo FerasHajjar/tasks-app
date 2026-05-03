@@ -745,7 +745,7 @@ async function loadFromCloud(){
   }
   folders = fr.data.map(f=>({id:f.id,name:f.name,icon:f.icon||'📁',open:f.open!==false,sortOrder:f.sort_order||0}));
   tasks   = tr.data.map(mapTask);
-  setSyncStatus('ok');
+  setSyncStatus('ok'); // ← always show Synced after load, even if empty
 }
 
 function mapTask(t){
@@ -759,7 +759,11 @@ function mapTask(t){
 }
 
 // Debounced save — batches rapid changes into one write
-function scheduleSave(){ clearTimeout(syncTimeout); setSyncStatus('saving'); syncTimeout=setTimeout(cloudSave,1200); }
+function scheduleSave(){
+  clearTimeout(syncTimeout);
+  if(folders.length>0||tasks.length>0) setSyncStatus('saving');
+  syncTimeout=setTimeout(cloudSave,1200);
+}
 
 async function cloudSave(){
   if(!currentUser){ setSyncStatus('offline'); return; }
