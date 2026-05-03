@@ -429,7 +429,10 @@ h1{font-family:'Bebas Neue',sans-serif;font-size:clamp(52px,13vw,84px);line-heig
 #ios-sheet .ios-close{width:100%;background:var(--surface3);border:1px solid var(--border2);color:var(--text);font-family:'DM Mono',monospace;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:11px;cursor:pointer;border-radius:2px}
 #ios-sheet .ios-close:hover{border-color:var(--accent);color:var(--accent)}
 
-/* ══ MISC ══ */
+/* ══ TOAST ══ */
+#toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--border2);color:var(--text);font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.06em;padding:10px 18px;border-radius:4px;z-index:999;white-space:nowrap;box-shadow:0 4px 20px var(--shadow);animation:fadeIn .2s ease;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
+#toast.error{border-color:rgba(255,69,58,.4);color:var(--danger);}
+
 .no-results{text-align:center;padding:40px 20px;color:var(--muted2);font-size:11px;letter-spacing:.15em;text-transform:uppercase}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:40vh;gap:16px;color:var(--muted2);font-size:11px;letter-spacing:.2em;text-transform:uppercase}
 .spinner{width:24px;height:24px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
@@ -733,7 +736,13 @@ async function loadFromCloud(){
     sb.from('folders').select('*').eq('user_id',uid).order('sort_order'),
     sb.from('tasks').select('*').eq('user_id',uid).order('sort_order'),
   ]);
-  if(fr.error||tr.error){ setSyncStatus('error'); return; }
+  if(fr.error||tr.error){
+    const msg = (fr.error||tr.error).message;
+    setSyncStatus('error');
+    showToast('DB Error: ' + msg, true);
+    console.error('Load error:', fr.error, tr.error);
+    return;
+  }
   folders = fr.data.map(f=>({id:f.id,name:f.name,icon:f.icon||'📁',open:f.open!==false,sortOrder:f.sort_order||0}));
   tasks   = tr.data.map(mapTask);
   setSyncStatus('ok');
@@ -757,7 +766,6 @@ async function cloudSave(){
   try{
     const uid=currentUser.id;
     const now=Date.now();
-    // Flush running timers
     const taskRows=tasks.map(t=>{
       let elapsed=t.elapsed, startedAt=t.startedAt;
       if(t.status==='running'&&t.startedAt){ elapsed+=now-t.startedAt; startedAt=now; }
@@ -769,13 +777,17 @@ async function cloudSave(){
       };
     });
     const folderRows=folders.map(f=>({id:f.id,user_id:uid,name:f.name,icon:f.icon,sort_order:f.sortOrder||0,open:f.open}));
-    const [fr,tr]=await Promise.all([
-      sb.from('folders').upsert(folderRows,{onConflict:'id'}),
-      sb.from('tasks').upsert(taskRows,{onConflict:'id'}),
-    ]);
-    if(fr.error||tr.error) throw new Error('upsert failed');
+    // Save folders first, then tasks (tasks reference folders)
+    if(folderRows.length>0){
+      const fr=await sb.from('folders').upsert(folderRows,{onConflict:'id'});
+      if(fr.error){ showToast('Folder save error: '+fr.error.message, true); throw fr.error; }
+    }
+    if(taskRows.length>0){
+      const tr=await sb.from('tasks').upsert(taskRows,{onConflict:'id'});
+      if(tr.error){ showToast('Task save error: '+tr.error.message, true); throw tr.error; }
+    }
     setSyncStatus('ok');
-  }catch(e){ setSyncStatus('error'); console.error(e); }
+  }catch(e){ setSyncStatus('error'); console.error('Save error:',e); }
 }
 
 async function deleteFromCloud(table,id){ await sb.from(table).delete().eq('id',id); }
@@ -1157,6 +1169,17 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){closePopover();closeReport();closeFolderModal();}
 });
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&currentUser)loadFromCloud().then(render); });
+
+let toastTimer=null;
+function showToast(msg, isError=false){
+  let t=document.getElementById('toast');
+  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
+  t.textContent=msg;
+  t.className=isError?'error':'';
+  t.style.display='block';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.style.display='none';},4000);
+}
 
 loadTheme();
 </script>
