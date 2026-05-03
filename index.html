@@ -12,7 +12,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230c0c0c'/%3E%3Ctext x='256' y='340' font-family='Arial Black' font-size='280' font-weight='900' text-anchor='middle' fill='%23d4ff00'%3ET%3C/text%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%230c0c0c'/%3E%3Ctext x='256' y='340' font-family='Arial Black' font-size='280' font-weight='900' text-anchor='middle' fill='%23d4ff00'%3ET%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 /* Prevent iOS Safari auto-zoom on input focus — must be >= 16px */
@@ -626,8 +626,15 @@ h1{font-family:'Bebas Neue',sans-serif;font-size:clamp(52px,13vw,84px);line-heig
 //  SUPABASE
 // ════════════════════════════════════════════════════
 const SUPA_URL = 'https://pfuxxtfiqhwqathfamfs.supabase.co';
-const SUPA_KEY = 'sb_publishable_mVtF7DIReYPCogau0UdFlQ_0aPuV9dt';
-const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmdXh4dGZpcWh3cWF0aGZhbWZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3NDQ5NzMsImV4cCI6MjA5MzMyMDk3M30.uLmNKhv8NhOAaRpeOc1a2qbHO_c4h-00tWicLfRCtP8';
+const sb = supabase.createClient(SUPA_URL, SUPA_KEY, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    storage: window.localStorage,
+  }
+});
 
 // ════════════════════════════════════════════════════
 //  STATE
@@ -675,8 +682,12 @@ async function doGoogleAuth(){
 }
 
 async function signOut(){
-  await sb.auth.signOut();
-  location.reload();
+  try {
+    await sb.auth.signOut({ scope: 'local' });
+  } catch(e) { console.log(e); }
+  // Clear any cached session keys
+  Object.keys(localStorage).forEach(k => { if(k.startsWith('sb-')) localStorage.removeItem(k); });
+  window.location.href = window.location.href.split('?')[0];
 }
 
 function showAuthErr(msg){
